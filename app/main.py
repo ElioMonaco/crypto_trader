@@ -1,17 +1,25 @@
 from utils import *
+from config.logging import setup_logging
+import logging
 
 WS_URL = "wss://stream.crypto.com/v2/market"
 
 subscribe_msg = {
-            "id": 1,
-            "method": "subscribe",
-            "params": {
-                "channels": ["ticker.BTC_USDT"]
-            }
-        }
+    "id": 1,
+    "method": "subscribe",
+    "params": {
+        "channels": ["ticker.BTC_USDT"]
+    }
+}
 
 async def main():
-    await connect()
+    setup_logging()
+    logger = logging.getLogger(__name__)
+
+    logger.info("Application starting")
+    logger.info("Connecting to Crypto.com websocket")
+
+    await connect(WS_URL, subscribe_msg)
 
 if __name__ == "__main__":
     asyncio.run(main())
