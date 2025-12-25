@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 import asyncio
 import websockets
 from uuid import uuid4
+from config.logging import *
 
 def get_sql_engine(driver):
     DB_USER = os.getenv("DB_USER")
@@ -18,11 +19,6 @@ def get_sql_engine(driver):
     return create_engine(
         f"{driver}://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
-
-import json
-import logging
-from uuid import uuid4
-import websockets
 
 logger = logging.getLogger(__name__)
 

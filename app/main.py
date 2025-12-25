@@ -1,6 +1,4 @@
 from utils import *
-from config.logging import setup_logging
-import logging
 
 WS_URL = "wss://stream.crypto.com/v2/market"
 
