@@ -1,5 +1,11 @@
 FROM python:3.11-slim
 
+# --- 1. App version ---
+ARG APP_VERSION
+ENV APP_VERSION=${APP_VERSION}
+
+RUN echo "Building bot version: $APP_VERSION"
+
 # Set working directory
 WORKDIR /app
 

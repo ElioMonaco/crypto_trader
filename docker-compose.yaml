@@ -1,12 +1,17 @@
 services:
   app:
-    build: ./app
-    container_name: card_trader_app
+    build:
+      context: ./app
+      args:
+        APP_VERSION: ${APP_VERSION:-0.1.0}
+    container_name: crypto_trader_app
     env_file: .env
     depends_on:
       - db
     volumes:
       - ./app:/app
+    environment:
+      APP_VERSION: ${APP_VERSION:-0.1.0}
     #restart: always
 
   db:
