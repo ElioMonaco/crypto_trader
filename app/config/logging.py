@@ -1,9 +1,12 @@
 from config.version import __version__
 import logging
+import os
+
+APP_VERSION = os.getenv("APP_VERSION", __version__)
 
 class VersionFilter(logging.Filter):
     def filter(self, record):
-        record.version = __version__
+        record.version = APP_VERSION
         return True
 
 

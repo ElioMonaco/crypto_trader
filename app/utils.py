@@ -1,7 +1,6 @@
 import pandas as pd 
 import json
 from pandasql import sqldf
-import os
 from urllib.parse import quote_plus
 from time import sleep
 from sqlalchemy import create_engine
