@@ -3,10 +3,12 @@ My bot for trading in crypto
 
 ## Version
 
-Current version: **v0.1.2**
+Current version: **v0.2.0**
 
 
 ## Changelog
+### v0.2.0 — 2025-12-25
+- added candlestick support
 
 ### v0.1.3 — 2025-12-25
 - added error handling for closed connections in websocket

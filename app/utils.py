@@ -11,9 +11,10 @@ from config.logging import *
 
 
 class SimulationBot:
-    def __init__(self, ws_url, subscribe_msg):
-        self.ws_url = ws_url
-        self.subscribe_msg = subscribe_msg
+    def __init__(self, message_metadata):
+        self.ws_url = message_metadata["end_point"]
+        self.subscribe_msg = message_metadata["subscribe_msg"]
+        self.data_type = message_metadata["data_type"]
 
         # setup logger
         self.logger = logging.getLogger(__name__)
@@ -83,9 +84,16 @@ class SimulationBot:
                             extra={"event_id": transaction_id}
                         )
 
-                        market_events = self.prepare_market_events_dataframe(
-                            data = data
-                        )
+                        if self.data_type == "candlestick":
+                            market_events = self.prepare_market_candles_dataframe(
+                                data = data
+                            )
+                            sink_table = "market_candles"
+                        else:
+                            market_events = self.prepare_market_events_dataframe(
+                                data = data
+                            )
+                            sink_table = "market_events"
 
                         if market_events is None or market_events.empty:
                             self.logger.debug(
@@ -101,14 +109,16 @@ class SimulationBot:
                             )
 
                             market_events.drop(columns=["raw_message"]).to_sql(
-                                "market_events",
+                                sink_table,
                                 con=self.engine,
                                 if_exists="append",
                                 index=False,
                                 method="multi"
                             )
 
-                            market_events[["transaction_id", "raw_message"]].to_sql(
+                            market_events["end_point"] = str(self.ws_url)
+
+                            market_events[["transaction_id", "raw_message", "end_point"]].to_sql(
                                 "raw_market_events",
                                 con=self.engine,
                                 if_exists="append",
@@ -163,5 +173,31 @@ class SimulationBot:
             dict_data["open_interest"] = int(data["result"]["data"][item]["oi"])
             dict_data["exchange_timestamp"] = int(data["result"]["data"][item]["t"])
             dict_data["raw_message"] = str(data)
+            items_list.append(dict_data)
+        return pd.DataFrame(items_list)
+
+def prepare_market_candles_dataframe(self, data):
+    for candle in range(len(data)):
+        if "result" not in data[candle] or "data" not in data[candle]["result"]:
+            return None
+
+        items_list = []
+        for item in range(len(data[candle]["result"]["data"])):
+            dict_data = {}
+            dict_data["srv_id"] = int(data[candle]["id"])
+            dict_data["method"] = str(data[candle]["method"])
+            dict_data["error_code"] = int(data[candle]["code"])
+            dict_data["instrument_name"] = str(data[candle]["result"]["instrument_name"])
+            dict_data["subscription"] = str(data[candle]["result"]["subscription"])
+            dict_data["channel"] = str(data[candle]["result"]["channel"])
+            dict_data["interval"] = str(data[candle]["result"]["interval"])
+            dict_data["open"] = float(data[candle]["result"]["data"][item]["o"])
+            dict_data["high"] = float(data[candle]["result"]["data"][item]["h"])
+            dict_data["low"] = float(data[candle]["result"]["data"][item]["l"])
+            dict_data["close"] = float(data[candle]["result"]["data"][item]["c"])
+            dict_data["volume"] = float(data[candle]["result"]["data"][item]["v"])
+            dict_data["start_timestamp"] = int(data[candle]["result"]["data"][item]["t"])
+            dict_data["last_update_timestamp"] = int(data[candle]["result"]["data"][item]["ut"])
+            dict_data["raw_message"] = str(data[candle])
             items_list.append(dict_data)
         return pd.DataFrame(items_list)
