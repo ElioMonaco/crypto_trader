@@ -1,0 +1,7 @@
+pandas
+pandasql
+sqlalchemy
+numpy
+requests
+psycopg2-binary
+websockets==12.0

@@ -1,0 +1,28 @@
+services:
+  app:
+    build: ./app
+    container_name: card_trader_app
+    env_file: .env
+    depends_on:
+      - db
+    volumes:
+      - ./app:/app
+    #restart: always
+
+  db:
+    image: citusdata/citus:12.1
+    container_name: crypto_trader
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${DB_USER}       
+      POSTGRES_PASSWORD: ${DB_PASSWORD} 
+      POSTGRES_DB: ${DB_NAME}         
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    #restart: always
+
+volumes:
+  db-data:
