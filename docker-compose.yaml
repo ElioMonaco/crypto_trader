@@ -16,7 +16,7 @@ services:
 
   db:
     image: citusdata/citus:12.1
-    container_name: crypto_trader
+    container_name: crypto_trader_db
     env_file: .env
     environment:
       POSTGRES_USER: ${DB_USER}       

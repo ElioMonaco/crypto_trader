@@ -10,14 +10,24 @@ subscribe_msg = {
     }
 }
 
+mode = os.getenv("TRADING_MODE", "simulation").lower()
+
 async def main():
     setup_logging()
     logger = logging.getLogger(__name__)
 
     logger.info("Application starting")
-    logger.info("Connecting to Crypto.com websocket")
+    mode = os.getenv("TRADING_MODE", "simulation").lower()
+    
+    if mode == "simulation":
+        logger.info("Running in simulation mode")
+        bot = SimulationBot(WS_URL, subscribe_msg)
+    else:
+        logger.info("Running in real trading mode (not implemented yet)")
+        return
 
-    await connect(WS_URL, subscribe_msg)
+    logger.info("Connecting to Crypto.com websocket")
+    await bot.connect()
 
 if __name__ == "__main__":
     asyncio.run(main())
