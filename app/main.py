@@ -1,12 +1,14 @@
 from utils import *
 
-WS_URL = "wss://stream.crypto.com/v2/market"
-
-subscribe_msg = {
-    "id": 1,
-    "method": "subscribe",
-    "params": {
-        "channels": ["ticker.BTC_USDT"]
+message_metadata = {
+    "end_point": "wss://stream.crypto.com/v2/market"
+    ,"data_type": "candlestick"
+    ,"subscribe_msg": {
+        "id": 1,
+        "method": "subscribe",
+        "params": {
+            "channels": ["ticker.BTC_USDT"]
+        }
     }
 }
 
@@ -21,7 +23,7 @@ async def main():
     
     if mode == "simulation":
         logger.info("Running in simulation mode")
-        bot = SimulationBot(WS_URL, subscribe_msg)
+        bot = SimulationBot(message_metadata)
     else:
         logger.info("Running in real trading mode (not implemented yet)")
         return
