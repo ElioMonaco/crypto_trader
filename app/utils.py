@@ -19,34 +19,63 @@ def get_sql_engine(driver):
         f"{driver}://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
 
-async def connect(msg):
-    async with websockets.connect(WS_URL) as ws:
-        subscribe_msg = msg
+import json
+import logging
+from uuid import uuid4
+import websockets
+
+logger = logging.getLogger(__name__)
+
+async def connect(ws_url, subscribe_msg):
+    logger.info("Opening websocket connection")
+
+    async with websockets.connect(ws_url) as ws:
         await ws.send(json.dumps(subscribe_msg))
+        logger.info("Subscription message sent")
 
         while True:
             transaction_id = str(uuid4())
+
             msg = await ws.recv()
             data = json.loads(msg)
+
+            logger.debug(
+                "Websocket message received",
+                extra={"event_id": transaction_id}
+            )
+
             market_events = prepare_market_events_dataframe(data)
             market_events["transaction_id"] = transaction_id
 
-            print(f"writing dataframe for transaction {transaction_id} ...")
-            market_events.drop(columns=['raw_message']).to_sql(
-                "market_events",   
-                con = get_sql_engine("postgresql+psycopg2"),
-                if_exists = "append",       
-                index = False,             
-                method = "multi"            
+            logger.info(
+                "Writing market events to database",
+                extra={
+                    "event_id": transaction_id,
+                    "rows": len(market_events)
+                }
             )
 
-            market_events[['transaction_id', 'raw_message']].to_sql(
-                "raw_market_events",   
-                con = get_sql_engine("postgresql+psycopg2"),
-                if_exists = "append",       
-                index = False,             
-                method = "multi"            
+            market_events.drop(columns=["raw_message"]).to_sql(
+                "market_events",
+                con=get_sql_engine("postgresql+psycopg2"),
+                if_exists="append",
+                index=False,
+                method="multi"
             )
+
+            market_events[["transaction_id", "raw_message"]].to_sql(
+                "raw_market_events",
+                con=get_sql_engine("postgresql+psycopg2"),
+                if_exists="append",
+                index=False,
+                method="multi"
+            )
+
+            logger.info(
+                "Database write completed",
+                extra={"event_id": transaction_id}
+            )
+
 
 def prepare_market_events_dataframe(data):
     items_list = []
