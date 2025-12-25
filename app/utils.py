@@ -29,56 +29,118 @@ class SimulationBot:
         self.engine = self.get_sql_engine()
 
     def get_sql_engine(self):
+        # return the connection string to the SQL database
         return create_engine(
             f"{self.driver}://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
         )
+        
+
+    async def heartbeat(self, ws, interval):
+        # define a heartbeat function to keep the websocket connection open
+        # this is because servers will close the connection after a while if you just listen but do not respond
+        while True:
+            try:
+                # send "ping" as most servers count it as client activity
+                await ws.send("ping")  
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.warning(f"Heartbeat error: {e}")
+                break
 
     async def connect(self):
         self.logger.info("Opening websocket connection")
-        async with websockets.connect(self.ws_url) as ws:
-            await ws.send(json.dumps(self.subscribe_msg))
-            self.logger.info("Subscription message sent")
 
-            while True:
-                transaction_id = str(uuid4())
-                msg = await ws.recv()
-                data = json.loads(msg)
+        while True:
+            try:
+                # Open websocket connection using async context manager
+                async with websockets.connect(
+                    self.ws_url
+                ) as ws:
+                    await ws.send(
+                        json.dumps(
+                            self.subscribe_msg
+                        )
+                    )
+                    self.logger.info("Subscription message sent")
 
-                self.logger.debug(
-                    "Websocket message received",
-                    extra={"event_id": transaction_id}
-                )
+                    # Start heartbeat in the background
+                    hb_task = asyncio.create_task(
+                        self.heartbeat(
+                            ws = ws
+                            ,interval = 30
+                        )
+                    )
 
-                market_events = self.prepare_market_events_dataframe(data)
-                market_events["transaction_id"] = transaction_id
+                    while True:
+                        transaction_id = str(uuid4())
+                        msg = await ws.recv()
+                        data = json.loads(msg)
 
-                self.logger.info(
-                    "Writing market events to database...",
-                    extra={"event_id": transaction_id, "rows": len(market_events)}
-                )
+                        self.logger.debug(
+                            "Websocket message received",
+                            extra={"event_id": transaction_id}
+                        )
 
-                market_events.drop(columns=["raw_message"]).to_sql(
-                    "market_events",
-                    con=self.engine,
-                    if_exists="append",
-                    index=False,
-                    method="multi"
-                )
+                        market_events = self.prepare_market_events_dataframe(
+                            data = data
+                        )
 
-                market_events[["transaction_id", "raw_message"]].to_sql(
-                    "raw_market_events",
-                    con=self.engine,
-                    if_exists="append",
-                    index=False,
-                    method="multi"
-                )
+                        if market_events is None or market_events.empty:
+                            self.logger.debug(
+                                "Message did not contain any data",
+                                extra={"event_id": transaction_id}
+                            )
+                        else:
+                            market_events["transaction_id"] = transaction_id
 
-                self.logger.info(
-                    "Database write completed",
-                    extra={"event_id": transaction_id}
-                )
+                            self.logger.info(
+                                "Writing market events to database...",
+                                extra={"event_id": transaction_id, "rows": len(market_events)}
+                            )
+
+                            market_events.drop(columns=["raw_message"]).to_sql(
+                                "market_events",
+                                con=self.engine,
+                                if_exists="append",
+                                index=False,
+                                method="multi"
+                            )
+
+                            market_events[["transaction_id", "raw_message"]].to_sql(
+                                "raw_market_events",
+                                con=self.engine,
+                                if_exists="append",
+                                index=False,
+                                method="multi"
+                            )
+
+                            self.logger.info(
+                                "Database write completed",
+                                extra={"event_id": transaction_id}
+                            )
+            # log potential errors and wait some seconds before attempting to reconnect
+            except Exception as e:
+                self.logger.error(f"Websocket connection error: {e}")
+                self.logger.info("Reconnecting in 5 seconds...")
+                await asyncio.sleep(5)
+
+            finally:
+                # Cancel heartbeat task when websocket closes or errors
+                if 'hb_task' in locals():
+                    hb_task.cancel()
+                    try:
+                        await hb_task
+                    except asyncio.CancelledError:
+                        pass
+
 
     def prepare_market_events_dataframe(self, data):
+
+        if "result" not in data or "data" not in data["result"]:
+            return None
+
         items_list = []
         for item in range(len(data["result"]["data"])):
             dict_data = {}
