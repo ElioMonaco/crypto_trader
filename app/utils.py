@@ -2,7 +2,7 @@ import pandas as pd
 import json
 from pandasql import sqldf
 from urllib.parse import quote_plus
-from time import sleep
+from time import sleep, time
 from sqlalchemy import create_engine
 import asyncio
 import websockets
@@ -29,11 +29,27 @@ class SimulationBot:
         self.db_name = os.getenv("DB_NAME")
         self.engine = self.get_sql_engine()
 
+        # get a set of already procesed candles from what was previously written in the SQL database
+        self.slow_ma = message_metadata["slow_ma"]
+        self.fast_ma = message_metadata["fast_ma"]
+        self.window_size = message_metadata["window_size"]
+        self.lower_bound = message_metadata["lower_bound"]
+        self.query_existing_candlesticks = f"SELECT DISTINCT start_timestamp FROM market_candles WHERE start_timestamp > {self.lower_bound}"
+        self.processed_candles = self.get_set_from_sql()[-self.window_size:]
+
     def get_sql_engine(self):
         # return the connection string to the SQL database
         return create_engine(
             f"{self.driver}://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
         )
+
+    def get_set_from_sql(self):
+
+        with self.get_sql_engine().connect() as conn:
+            result = conn.execute(text(self.query_existing_candlesticks))
+            my_set = set(row[0] for row in result)
+
+        return sorted(my_set)
         
 
     async def heartbeat(self, ws, interval):
@@ -76,6 +92,8 @@ class SimulationBot:
 
                     while True:
                         transaction_id = str(uuid4())
+                        if self.data_type == "candlestick":
+                            processed_candlesticks = get_set_from_sql()
                         msg = await ws.recv()
                         data = json.loads(msg)
 
@@ -177,27 +195,35 @@ class SimulationBot:
         return pd.DataFrame(items_list)
 
 def prepare_market_candles_dataframe(self, data):
-    for candle in range(len(data)):
-        if "result" not in data[candle] or "data" not in data[candle]["result"]:
-            return None
+    
+    if "result" not in data or "data" not in data["result"]:
+        return None
+    else:
+        df = pd.DataFrame(data["result"]["data"])
+        df.rename(
+            columns = {
+                "o": "open"
+                ,"h": "high"
+                ,"l": "low"
+                ,"c": "close"
+                ,"v": "volume"
+                ,"t": "start_timestamp"
+                ,"ut": "last_update_timestamp"
+            }
+            ,inplace=True
+        )
 
-        items_list = []
-        for item in range(len(data[candle]["result"]["data"])):
-            dict_data = {}
-            dict_data["srv_id"] = int(data[candle]["id"])
-            dict_data["method"] = str(data[candle]["method"])
-            dict_data["error_code"] = int(data[candle]["code"])
-            dict_data["instrument_name"] = str(data[candle]["result"]["instrument_name"])
-            dict_data["subscription"] = str(data[candle]["result"]["subscription"])
-            dict_data["channel"] = str(data[candle]["result"]["channel"])
-            dict_data["interval"] = str(data[candle]["result"]["interval"])
-            dict_data["open"] = float(data[candle]["result"]["data"][item]["o"])
-            dict_data["high"] = float(data[candle]["result"]["data"][item]["h"])
-            dict_data["low"] = float(data[candle]["result"]["data"][item]["l"])
-            dict_data["close"] = float(data[candle]["result"]["data"][item]["c"])
-            dict_data["volume"] = float(data[candle]["result"]["data"][item]["v"])
-            dict_data["start_timestamp"] = int(data[candle]["result"]["data"][item]["t"])
-            dict_data["last_update_timestamp"] = int(data[candle]["result"]["data"][item]["ut"])
-            dict_data["raw_message"] = str(data[candle])
-            items_list.append(dict_data)
-        return pd.DataFrame(items_list)
+        df["open"] = pd.to_numeric(df["open"])
+        df["high"] = pd.to_numeric(df["high"])
+        df["low"] = pd.to_numeric(df["low"])
+        df["close"] = pd.to_numeric(df["close"])
+        df["volume"] = pd.to_numeric(df["volume"])
+        df["srv_id"] = int(data["id"])
+        df["method"] = str(data["method"])
+        df["error_code"] = int(data["code"])
+        df["instrument_name"] = str(data["result"]["instrument_name"])
+        df["subscription"] = str(data["result"]["subscription"])
+        df["channel"] = str(data["result"]["channel"])
+        df["interval"] = str(data["result"]["interval"])
+
+        return df

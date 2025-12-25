@@ -1,5 +1,9 @@
 from utils import *
 
+# determine which bot you want to run, either simulation or real.
+mode = os.getenv("TRADING_MODE", "simulation").lower()
+
+# define what websocket subscribe to, what type of data to process and where to get it to instantiate the bot.
 message_metadata = {
     "end_point": "wss://stream.crypto.com/v2/market"
     ,"data_type": "candlestick"
@@ -10,20 +14,26 @@ message_metadata = {
             "channels": ["ticker.BTC_USDT"]
         }
     }
+    # determine the size of the slow moving average, fast moving average and total dataset windows.
+    ,"slow_ma": 200
+    ,"fast_ma": 50
+    ,"window_size": 1000
+    # start by only considering candlesticks from an hiur ago
+    ,"lower_bound": int((time() - 3600) * 1000)
 }
-
-mode = os.getenv("TRADING_MODE", "simulation").lower()
 
 async def main():
     setup_logging()
     logger = logging.getLogger(__name__)
 
     logger.info("Application starting")
-    mode = os.getenv("TRADING_MODE", "simulation").lower()
     
     if mode == "simulation":
         logger.info("Running in simulation mode")
+
+        # instatiate the simulation class
         bot = SimulationBot(message_metadata)
+
     else:
         logger.info("Running in real trading mode (not implemented yet)")
         return
