@@ -1,0 +1,2 @@
+CLUSTER market_events USING idx_exchange_timestamp;
+ANALYZE market_events;
