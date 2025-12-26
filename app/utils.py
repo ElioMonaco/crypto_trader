@@ -36,6 +36,8 @@ class SimulationBot:
         self.lower_bound = message_metadata["lower_bound"]
         self.query_existing_candlesticks = f"SELECT DISTINCT start_timestamp FROM market_candles WHERE start_timestamp > {self.lower_bound}"
         self.processed_candles = self.get_set_from_sql()[-self.window_size:]
+        self.actual_slow_ma = None 
+        self.actual_fast_ma = None
 
     def get_sql_engine(self):
         # return the connection string to the SQL database
@@ -65,6 +67,20 @@ class SimulationBot:
             except Exception as e:
                 self.logger.warning(f"Heartbeat error: {e}")
                 break
+    
+    def compute_mas(self):
+        n = len(self.closed_closes)
+        ma_fast = None
+        ma_slow = None
+
+        if n >= 50:
+            last_ma_window = list(self.closed_closes)[-self.fast_ma:]
+            ma_fast = sum(last_ma_window) / self.fast_ma
+
+        if n >= 200:
+            ma_slow = sum(self.closed_closes) / self.slow_ma
+            
+        return ma_fast, ma_slow
 
     async def connect(self):
         self.logger.info("Opening websocket connection")

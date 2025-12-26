@@ -3,5 +3,6 @@ pandasql
 sqlalchemy
 numpy
 requests
+collections
 psycopg2-binary
 websockets==12.0
