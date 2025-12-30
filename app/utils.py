@@ -34,25 +34,87 @@ class SimulationBot:
         self.fast_ma = message_metadata["fast_ma"]
         self.window_size = message_metadata["window_size"]
         self.lower_bound = message_metadata["lower_bound"]
-        self.query_existing_candlesticks = f"SELECT DISTINCT start_timestamp FROM market_candles WHERE start_timestamp > {self.lower_bound}"
-        self.processed_candles = self.get_set_from_sql()[-self.window_size:]
-        self.actual_slow_ma = None 
-        self.actual_fast_ma = None
+        self.position = message_metadata["position"]
+        self.entry_price = message_metadata["entry_price"]
+        self.balance = message_metadata["balance"]
+        self.initial_balance = message_metadata["balance"]
+        self.balance_btc = message_metadata["balance_btc"]
+        self.fee = message_metadata["fee"]
+        self.candles = OrderedDict()
+        self.trade_log = []
 
     def get_sql_engine(self):
         # return the connection string to the SQL database
         return create_engine(
             f"{self.driver}://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
-        )
+        )        
+    
+    def add_moving_averages(self, df):
+        df["ma_fast"] = df["close"].rolling(self.fast_ma).mean()
+        df["ma_slow"] = df["close"].rolling(self.slow_ma).mean()
+        return df
+    
+    def check_signal(self, df):
+        if len(df) < (self.slow_ma + 1):
+            return None
 
-    def get_set_from_sql(self):
+        prev = df.iloc[-2]
+        curr = df.iloc[-1]
 
-        with self.get_sql_engine().connect() as conn:
-            result = conn.execute(text(self.query_existing_candlesticks))
-            my_set = set(row[0] for row in result)
+        # Golden cross
+        if prev.ma_fast < prev.ma_slow and curr.ma_fast > curr.ma_slow:
+            return "buy"
 
-        return sorted(my_set)
-        
+        # Death cross
+        if prev.ma_fast > prev.ma_slow and curr.ma_fast < curr.ma_slow:
+            return "sell"
+
+        return None
+    
+    def execute_buy(self, price, timestamp):
+        if self.balance <= 0:
+            self.logger.info(f"Not enough liquidity to buy. Current liquidity: {self.balance}")
+            return
+
+        qty = self.balance / price
+        fee = qty * self.fee
+
+        self.balance_btc = qty - fee
+        self.balance = 0.0
+        self.entry_price = price
+
+        self.trade_log.append({
+            "type": "BUY",
+            "price": price,
+            "btc": self.balance_btc,
+            "cash": self.balance,
+            "t": timestamp
+        })
+
+    def execute_sell(self, price, timestamp):
+        if self.balance_btc <= 0:
+            self.logger.info(f"Not enough assets to sell. Current assets: {self.balance_btc}")
+            return
+
+        proceeds = self.balance_btc * price
+        fee = proceeds * self.fee
+
+        self.balance = proceeds - fee
+        self.balance_btc = 0.0
+        self.entry_price = None
+
+        self.trade_log.append({
+            "type": "SELL",
+            "price": price,
+            "cash": self.balance,
+            "pnl": self.balance - self.initial_balance,
+            "t": timestamp
+        })
+
+    def unrealized_pnl(self, current_price):
+        if self.balance_btc == 0:
+            return 0.0
+        return self.balance_btc * (current_price - self.entry_price)
 
     async def heartbeat(self, ws, interval):
         # define a heartbeat function to keep the websocket connection open
@@ -67,20 +129,7 @@ class SimulationBot:
             except Exception as e:
                 self.logger.warning(f"Heartbeat error: {e}")
                 break
-    
-    def compute_mas(self):
-        n = len(self.closed_closes)
-        ma_fast = None
-        ma_slow = None
 
-        if n >= 50:
-            last_ma_window = list(self.closed_closes)[-self.fast_ma:]
-            ma_fast = sum(last_ma_window) / self.fast_ma
-
-        if n >= 200:
-            ma_slow = sum(self.closed_closes) / self.slow_ma
-            
-        return ma_fast, ma_slow
 
     async def connect(self):
         self.logger.info("Opening websocket connection")
@@ -108,8 +157,6 @@ class SimulationBot:
 
                     while True:
                         transaction_id = str(uuid4())
-                        if self.data_type == "candlestick":
-                            processed_candlesticks = get_set_from_sql()
                         msg = await ws.recv()
                         data = json.loads(msg)
 
@@ -119,10 +166,22 @@ class SimulationBot:
                         )
 
                         if self.data_type == "candlestick":
-                            market_events = self.prepare_market_candles_dataframe(
-                                data = data
+                            market_events = self.candles_to_df(
+                                msg = data
                             )
+                            market_events["transaction_id"] = transaction_id
+                            market_events = add_moving_averages(market_events)
                             sink_table = "market_candles"
+
+                            signal = self.check_signal(market_events)
+                            last_price = market_events.iloc[-1].close
+                            last_t = market_events.index[-1]
+
+                            if signal == "buy" and self.balance_btc == 0:
+                                self.execute_buy(last_price, last_t)
+
+                            elif signal == "sell" and self.balance_btc > 0:
+                                self.execute_sell(last_price, last_t)
                         else:
                             market_events = self.prepare_market_events_dataframe(
                                 data = data
@@ -209,37 +268,34 @@ class SimulationBot:
             dict_data["raw_message"] = str(data)
             items_list.append(dict_data)
         return pd.DataFrame(items_list)
-
-def prepare_market_candles_dataframe(self, data):
     
-    if "result" not in data or "data" not in data["result"]:
-        return None
-    else:
-        df = pd.DataFrame(data["result"]["data"])
-        df.rename(
-            columns = {
-                "o": "open"
-                ,"h": "high"
-                ,"l": "low"
-                ,"c": "close"
-                ,"v": "volume"
-                ,"t": "start_timestamp"
-                ,"ut": "last_update_timestamp"
+    def candles_to_df(self, msg):
+        msg_data = msg["result"]["data"]
+
+        for candle in msg_data:
+            t = candle["t"]
+
+            self.candles[t] = {
+                "open": float(candle["o"]),
+                "high": float(candle["h"]),
+                "low": float(candle["l"]),
+                "close": float(candle["c"]),
+                "volume": float(candle["v"]),
+                "t": int(t),
+                "ut": int(candle["ut"])
             }
-            ,inplace=True
-        )
-
-        df["open"] = pd.to_numeric(df["open"])
-        df["high"] = pd.to_numeric(df["high"])
-        df["low"] = pd.to_numeric(df["low"])
-        df["close"] = pd.to_numeric(df["close"])
-        df["volume"] = pd.to_numeric(df["volume"])
-        df["srv_id"] = int(data["id"])
-        df["method"] = str(data["method"])
-        df["error_code"] = int(data["code"])
-        df["instrument_name"] = str(data["result"]["instrument_name"])
-        df["subscription"] = str(data["result"]["subscription"])
-        df["channel"] = str(data["result"]["channel"])
-        df["interval"] = str(data["result"]["interval"])
-
+        candles.move_to_end(t) 
+        df = pd.DataFrame(self.candles.values())
+        df["srv_id"] = msg["id"]
+        df["method"] = msg["method"]
+        df["error_code"] = msg["code"]
+        df["instrument_name"] = msg["result"]["instrument_name"]
+        df["subscription"] = msg["result"]["subscription"]
+        df["channel"] = msg["result"]["channel"]
+        df["interval"] = msg["result"]["interval"]
+        df["start_timestamp"] = df["t"]
+        df = df[df['t'] > self.lower_bound]
+        df = df.rename(columns={'ut': 'last_update_timestamp'})
+        df = df.sort_values("t")
+        df.set_index("t", inplace=True)
         return df

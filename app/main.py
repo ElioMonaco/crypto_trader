@@ -18,8 +18,18 @@ message_metadata = {
     ,"slow_ma": 200
     ,"fast_ma": 50
     ,"window_size": 1000
-    # start by only considering candlesticks from an hiur ago
+    # start by only considering candlesticks from an hour ago
     ,"lower_bound": int((time() - 3600) * 1000)
+    # starting state None, will become "long" when asset is bought.
+    ,"position": None
+    # starting price of asset when first bought
+    ,"entry_price": None
+    # starting balance in USD
+    ,"balance": 10_000 
+    # starting balance in BTC
+    ,"balance_btc": 0
+    # trading fees
+    ,"fee": .001
 }
 
 async def main():
