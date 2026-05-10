@@ -209,7 +209,6 @@ class DBManager:
                 ,start_timestamp BIGINT NOT NULL
                 ,last_update_timestamp BIGINT NOT NULL
                 ,insert_timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
-                ,CONSTRAINT uq_messages UNIQUE (transaction_id)
             );
         """)
 
