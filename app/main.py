@@ -45,13 +45,14 @@ if __name__ == "__main__":
     threading.Thread(
         target=db_worker,
         args=(crypto_socket.store, db),
-        daemon=True
+        #daemon=True
     ).start()
 
 
     #crypto_socket.run()
     thread_run = threading.Thread(
-    target=crypto_socket.run,
-    daemon=True
-)
+        target=crypto_socket.run,
+        #daemon=True
+    )
+    
     thread_run.start()
