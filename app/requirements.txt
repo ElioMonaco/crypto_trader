@@ -1,6 +1,6 @@
 pandas
 requests
 psycopg2-binary
-websockets
+websocket-client
 dataclasses
 uuid
