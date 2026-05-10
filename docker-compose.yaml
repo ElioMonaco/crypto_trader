@@ -1,33 +1,16 @@
 services:
-  app:
+  crypto_trader:
     build:
       context: ./app
-      args:
-        APP_VERSION: ${APP_VERSION:-0.1.0}
-    container_name: crypto_trader_app
-    env_file: .env
-    depends_on:
-      - db
-    volumes:
-      - ./app:/app
-    environment:
-      APP_VERSION: ${APP_VERSION:-0.1.0}
-    #restart: always
+      dockerfile: Dockerfile
+    container_name: crypto_trader
+    restart: always
+    env_file:
+      - .env
+    networks:
+      - shared_db_net
 
-  db:
-    image: citusdata/citus:12.1
-    container_name: crypto_trader_db
-    env_file: .env
-    environment:
-      POSTGRES_USER: ${DB_USER}       
-      POSTGRES_PASSWORD: ${DB_PASSWORD} 
-      POSTGRES_DB: ${DB_NAME}         
-    volumes:
-      - db-data:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d
-    ports:
-      - "5432:5432"
-    #restart: always
-
-volumes:
-  db-data:
+networks:
+  shared_db_net:
+    external: true
+    name: shared_db_net
