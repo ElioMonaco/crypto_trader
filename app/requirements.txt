@@ -2,7 +2,6 @@ pandas
 requests
 psycopg2-binary
 websockets
-json
 dataclasses
 uuid
 collections
