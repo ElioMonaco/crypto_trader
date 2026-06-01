@@ -8,8 +8,8 @@
 
 CREATE TABLE market_candles(
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY
-    ,transaction_id TEXT NOT NULL
-    ,feed_id TEXT NOT NULL REFERENCES market_feeds(feed_id)
+    ,transaction_id UUID NOT NULL
+    ,feed_id UUID NOT NULL REFERENCES market_feeds(feed_id)
     ,open NUMERIC(18,8) NOT NULL
     ,high NUMERIC(18,8) NOT NULL
     ,low NUMERIC(18,8) NOT NULL
@@ -70,7 +70,7 @@ COMMENT ON COLUMN market_candles.insert_timestamp IS
 
 CREATE TABLE market_feeds(
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY
-    ,feed_id TEXT NOT NULL
+    ,feed_id UUID NOT NULL
     ,srv_id INT NOT NULL
     ,symbol TEXT NOT NULL
     ,method TEXT NOT NULL
