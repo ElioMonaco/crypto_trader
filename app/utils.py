@@ -12,6 +12,15 @@ from uuid import uuid7      # Generates unique IDs for transactions/feeds
 import threading            # (Unused here, likely intended for db_worker threading)
 import psycopg2             # PostgreSQL driver
 from collections import deque  # Efficient FIFO queue for candle buffering
+import logging
+
+# ----------------------------
+# LOGGING CONFIGURATION
+# ----------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 
 # ----------------------------
@@ -164,6 +173,16 @@ class CandleStore:
                 # Replace latest with new active candle
                 self.latest = c
 
+            # Out-of-order candle — timestamp is older than current latest
+            if c.start_timestamp < self.latest.start_timestamp:
+                logging.warning(
+                    "Out-of-order candle for %s — received %s but latest is %s",
+                    self.symbol,
+                    c.start_timestamp,
+                    self.latest.start_timestamp
+                )
+                continue
+
     def to_dataframe(self):
         """
         Converts stored candles into a Pandas DataFrame.
@@ -243,7 +262,7 @@ class CryptoSocket:
         Called when WebSocket connection is established.
         Sends subscription request.
         """
-        print("Connected")
+        logging.info("Connected")
         ws.send(json.dumps(self.subscribe_message))
 
     def on_message(self, ws, message):
@@ -262,13 +281,19 @@ class CryptoSocket:
         """
         Triggered when WebSocket connection closes.
         """
-        print("Disconnected")
+        logging.info("Disconnected")
+
+        # flush the last active candle before losing it
+        if self.store.latest is not None:
+            self.store.history.append(self.store.latest)
+            self.store.buffer.append(self.store.latest)
+            self.store.latest = None
 
     def on_error(self, ws, error):
         """
         Handles WebSocket errors.
         """
-        print("Error:", error)
+        logging.error("Error: %s", error)
 
     def run(self):
         """
@@ -296,7 +321,7 @@ class CryptoSocket:
 
             except Exception as e:
                 # Any unexpected failure triggers reconnect
-                print("Reconnect due to:", e)
+                logging.error("Reconnect due to: %s", e)
 
             # Prevent tight reconnect loop
             time.sleep(3)
