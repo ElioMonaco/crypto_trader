@@ -96,7 +96,7 @@ if __name__ == "__main__":
     threading.Thread(
         target=db_worker,  # function that processes candle buffer
         args=(crypto_socket.store, db),  # shared candle store + DB connection
-        # daemon=True  # (commented out) would make thread exit with main program
+        daemon=True  # would make thread exit with main program
     ).start()
 
 
@@ -111,7 +111,7 @@ if __name__ == "__main__":
     # This allows DB worker to run concurrently
     thread_run = threading.Thread(
         target=crypto_socket.run,
-        # daemon=True  # (commented out) ensures thread does not block shutdown
+        daemon=True  # ensures thread does not block shutdown
     )
 
     # Start WebSocket streaming thread

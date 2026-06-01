@@ -335,7 +335,7 @@ class DBManager:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS market_feeds(
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                feed_id TEXT NOT NULL,
+                feed_id UUID NOT NULL,
                 srv_id INT NOT NULL,
                 symbol TEXT NOT NULL,
                 method TEXT NOT NULL,
@@ -349,8 +349,8 @@ class DBManager:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS market_candles(
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                transaction_id TEXT NOT NULL,
-                feed_id TEXT NOT NULL REFERENCES market_feeds(feed_id),
+                transaction_id UUID NOT NULL,
+                feed_id UUID NOT NULL REFERENCES market_feeds(feed_id),
                 open NUMERIC(18,8) NOT NULL,
                 high NUMERIC(18,8) NOT NULL,
                 low NUMERIC(18,8) NOT NULL,
@@ -422,20 +422,76 @@ class DBManager:
 # BACKGROUND DB WORKER
 # ----------------------------
 
-def db_worker(store, db):
+def db_worker(store, db_config):
     """
-    Background loop that:
-    - consumes buffered candles
-    - writes them to PostgreSQL
+    Background worker that batches and persists closed candles to PostgreSQL.
+    Runs in its own thread with its own dedicated DB connection.
+    
+    Args:
+        store:     CandleStore instance containing the buffer of closed candles
+        db_config: dict of DB connection params (host, port, database, user, password)
+    """
 
-    Intended to run in a separate thread.
-    """
+    # Create a dedicated connection for this thread.
+    # This avoids sharing the main thread's connection which is not thread-safe in psycopg2.
+    conn = psycopg2.connect(**db_config)
 
     while True:
-        # Sleep to batch DB writes (reduces load)
+
+        # Sleep before each drain cycle.
+        # This acts as an implicit batching window — candles accumulate in the
+        # buffer during this interval and are flushed together in one DB round trip.
+        # Adjust this value to trade off latency vs DB write frequency.
         time.sleep(2)
 
-        # Drain buffer queue
+        # Collect all candles currently in the buffer into a local list.
+        # We drain the entire buffer at once rather than processing one at a time,
+        # so we can insert them all in a single executemany call.
+        batch = []
         while store.buffer:
-            candle = store.buffer.popleft()
-            db.insert_candle(candle)
+            # popleft() is O(1) on a deque and thread-safe due to Python's GIL.
+            # We move each candle from the shared buffer into our local batch list.
+            batch.append(store.buffer.popleft())
+
+        # Only attempt a DB write if we actually collected something.
+        # Skipping empty batches avoids unnecessary DB round trips during quiet periods.
+        if batch:
+
+            cur = conn.cursor()
+
+            # executemany sends ALL rows to PostgreSQL in a single round trip.
+            # This is much faster than calling execute() once per candle,
+            # where each call would incur a separate network round trip overhead.
+            cur.executemany("""
+                INSERT INTO market_candles (
+                    transaction_id, feed_id, open, high, low, close,
+                    volume, start_timestamp, last_update_timestamp
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+                # Build a list of tuples — one per candle in the batch.
+                # executemany iterates over this list and substitutes %s placeholders
+                # with the actual values, handling SQL escaping safely.
+                [
+                    (
+                        c.transaction_id,          # UUID identifying this message batch
+                        c.feed_id,                 # UUID identifying the websocket feed
+                        c.open,                    # Opening price of the candle
+                        c.high,                    # Highest price in the interval
+                        c.low,                     # Lowest price in the interval
+                        c.close,                   # Closing price of the candle
+                        c.volume,                  # Traded volume in the interval
+                        c.start_timestamp,         # Candle open time (ms epoch)
+                        c.last_update_timestamp    # Last update time of the candle
+                    )
+                    for c in batch  # iterate over all candles collected in this cycle
+                ]
+            )
+
+            # Commit the transaction — makes all inserted rows visible and durable.
+            # Without this, inserts are rolled back when the connection closes.
+            conn.commit()
+
+            # Close the cursor to free server-side resources.
+            # A new cursor is created each cycle rather than reusing one,
+            # keeping each batch isolated in its own cursor scope.
+            cur.close()
