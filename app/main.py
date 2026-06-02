@@ -77,9 +77,9 @@ if __name__ == "__main__":
         },
 
         # Pass DB manager so socket can share feed metadata context
-        db=db,
+        db = db,
         # Pass Telegram notifications instance for alerting
-        telegram_notifications=telegram_notifications
+        telegram_notifications = telegram_notifications
     )
 
 

@@ -14,6 +14,8 @@ import psycopg2             # PostgreSQL driver
 from collections import deque  # Efficient FIFO queue for candle buffering
 import logging
 import requests
+import sys
+import signal
 
 # ----------------------------
 # LOGGING CONFIGURATION
@@ -340,6 +342,30 @@ class CryptoSocket:
 
             # Prevent tight reconnect loop
             time.sleep(3)
+
+    def _handle_shutdown(self, signum, frame):
+        """
+        Called when Docker sends SIGTERM (compose down) or SIGINT (Ctrl+C).
+        Flushes the last candle, sends Telegram notification, then exits cleanly.
+        """
+        logging.info("Shutdown signal received, closing gracefully...")
+
+        # Flush latest candle to buffer before closing
+        if self.store.latest is not None:
+            self.store.history.append(self.store.latest)
+            self.store.buffer.append(self.store.latest)
+            self.store.latest = None
+
+        # Send Telegram notification
+        self.telegram_notifications.send_telegram(
+            f"🔴 crypto daemon stopped on {self.hostname} ({self.symbol} {self.interval})"
+        )
+
+        # Close the WebSocket connection cleanly
+        if self.ws:
+            self.ws.close()
+
+        sys.exit(0)
 
 
 # ----------------------------
