@@ -13,6 +13,7 @@ import threading            # (Unused here, likely intended for db_worker thread
 import psycopg2             # PostgreSQL driver
 from collections import deque  # Efficient FIFO queue for candle buffering
 import logging
+import requests
 
 # ----------------------------
 # LOGGING CONFIGURATION
@@ -223,9 +224,10 @@ class CryptoSocket:
     - Handle reconnect logic
     """
 
-    def __init__(self, endpoint, subscribe_message, db):
+    def __init__(self, endpoint, subscribe_message, db, telegram_notifications):
         self.endpoint = endpoint
         self.subscribe_message = subscribe_message
+        self.telegram_notifications = telegram_notifications
         self.ws = None
         self.db = db
 
@@ -264,6 +266,7 @@ class CryptoSocket:
         """
         logging.info("Connected")
         ws.send(json.dumps(self.subscribe_message))
+        self.telegram_notifications.send_message(f"✅ crypto deamon started on {self.hostname}, subscribed to {self.symbol} {self.interval} candles")
 
     def on_message(self, ws, message):
         """
@@ -288,12 +291,14 @@ class CryptoSocket:
             self.store.history.append(self.store.latest)
             self.store.buffer.append(self.store.latest)
             self.store.latest = None
+        self.telegram_notifications.send_message(f"✅ crypto deamon disconnected from {self.hostname}, attempting to reconnect...")
 
     def on_error(self, ws, error):
         """
         Handles WebSocket errors.
         """
         logging.error("Error: %s", error)
+        self.telegram_notifications.send_message(f"❌ crypto deamon error on {self.hostname}: {error}")
 
     def run(self):
         """
@@ -520,3 +525,24 @@ def db_worker(store, db_config):
             # A new cursor is created each cycle rather than reusing one,
             # keeping each batch isolated in its own cursor scope.
             cur.close()
+
+# ----------------------------
+# TELEGRAM NOTIFICATION
+# ----------------------------
+
+class TelegramNotifications:
+    """
+    Handles notifications of events via telegram bot.
+    """
+
+    def __init__(self, telegram_token, telegram_chat):
+        # Establish persistent DB connection
+        self.telegram_token = telegram_token
+        self.telegram_chat = telegram_chat
+
+    def send_telegram(self, message):
+        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+        requests.post(url, json={
+            "chat_id": self.telegram_chat,
+            "text": message
+        }, timeout=10)
