@@ -266,7 +266,7 @@ class CryptoSocket:
         """
         logging.info("Connected")
         ws.send(json.dumps(self.subscribe_message))
-        self.telegram_notifications.send_message(f"✅ crypto deamon started on {self.hostname}, subscribed to {self.symbol} {self.interval} candles")
+        self.telegram_notifications.send_telegram(f"✅ crypto deamon started on {self.hostname}, subscribed to {self.symbol} {self.interval} candles")
 
     def on_message(self, ws, message):
         """
@@ -291,14 +291,14 @@ class CryptoSocket:
             self.store.history.append(self.store.latest)
             self.store.buffer.append(self.store.latest)
             self.store.latest = None
-        self.telegram_notifications.send_message(f"✅ crypto deamon disconnected from {self.hostname}, attempting to reconnect...")
+        self.telegram_notifications.send_telegram(f"✅ crypto deamon disconnected from {self.hostname}, attempting to reconnect...")
 
     def on_error(self, ws, error):
         """
         Handles WebSocket errors.
         """
         logging.error("Error: %s", error)
-        self.telegram_notifications.send_message(f"❌ crypto deamon error on {self.hostname}: {error}")
+        self.telegram_notifications.send_telegram(f"❌ crypto deamon error on {self.hostname}: {error}")
 
     def run(self):
         """
