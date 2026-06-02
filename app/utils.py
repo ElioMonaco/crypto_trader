@@ -551,8 +551,18 @@ class TelegramNotifications:
         self.telegram_chat = telegram_chat
 
     def send_telegram(self, message):
-        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-        requests.post(url, json={
-            "chat_id": self.telegram_chat,
-            "text": message
-        }, timeout=10)
+        try:
+            url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+            response = requests.post(url, json={
+                "chat_id": self.telegram_chat,
+                "text": message
+            }, timeout=10)
+            response.raise_for_status()
+        except requests.exceptions.ConnectionError as e:
+            logging.error("Telegram connection failed (network/DNS): %s", e)
+        except requests.exceptions.Timeout:
+            logging.error("Telegram request timed out")
+        except requests.exceptions.HTTPError as e:
+            logging.error("Telegram HTTP error: %s | response: %s", e, e.response.text)
+        except Exception as e:
+            logging.error("Telegram unexpected error: %s", e)
