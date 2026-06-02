@@ -102,12 +102,20 @@ if __name__ == "__main__":
     # START DATABASE WORKER THREAD
     # ----------------------------
 
+    db_credentials = {
+        "host": DB_HOST,
+        "port": DB_PORT,
+        "database": DB_NAME,
+        "user": DB_USER,
+        "password": DB_PASSWORD
+    }
+
     # This thread continuously:
     # - reads closed candles from in-memory buffer
     # - writes them into PostgreSQL asynchronously
     threading.Thread(
         target=db_worker,  # function that processes candle buffer
-        args=(crypto_socket.store, db),  # shared candle store + DB connection
+        args=(crypto_socket.store, db_credentials),  # shared candle store + DB connection
         daemon=True  # would make thread exit with main program
     ).start()
 
