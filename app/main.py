@@ -13,7 +13,7 @@ DB_PORT = os.getenv("DB_PORT", "5432")       # Default PostgreSQL port if not se
 DB_NAME = os.getenv("DB_NAME")               # Database name
 DB_USER = os.getenv("DB_USER")               # Database username
 DB_PASSWORD = os.getenv("DB_PASSWORD")       # Database password
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # Telegram bot token for notifications
+TELEGRAM_TOKEN = os.getenv("TELEBOT_ID")  # Telegram bot token for notifications
 CHAT_ID = os.getenv("CHAT_ID")                # Telegram chat ID for notifications
 
 
