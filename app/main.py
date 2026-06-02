@@ -125,14 +125,14 @@ if __name__ == "__main__":
     # ----------------------------
 
     # Option 1 (disabled): run WebSocket in main thread
-    # crypto_socket.run()
+    crypto_socket.run()
 
-    # Option 2 (active): run WebSocket in separate thread
-    # This allows DB worker to run concurrently
-    thread_run = threading.Thread(
-        target=crypto_socket.run,
-        daemon=True  # ensures thread does not block shutdown
-    )
+    # # Option 2 (active): run WebSocket in separate thread
+    # # This allows DB worker to run concurrently
+    # thread_run = threading.Thread(
+    #     target=crypto_socket.run,
+    #     daemon=True  # ensures thread does not block shutdown
+    # )
 
-    # Start WebSocket streaming thread
-    thread_run.start()
+    # # Start WebSocket streaming thread
+    # thread_run.start()
