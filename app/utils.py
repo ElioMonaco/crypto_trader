@@ -277,7 +277,17 @@ class CryptoSocket:
         # Parse JSON message
         data = json.loads(message)
 
-        # Forward to candle store
+        # --- Heartbeat response ---
+        # crypto.com sends {"method": "public/heartbeat", "code": 0}
+        # and requires a respond-heartbeat reply or it closes the connection (~90s timeout)
+        if data.get("method") == "public/heartbeat":
+            ws.send(json.dumps({
+                "id": data["id"],
+                "method": "public/respond-heartbeat"
+            }))
+            return
+
+        # Forward candle data to store as before
         self.store.update(data, transaction_id)
 
     def on_close(self, ws, close_status_code, close_msg):
