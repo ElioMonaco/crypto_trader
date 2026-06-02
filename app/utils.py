@@ -261,6 +261,10 @@ class CryptoSocket:
             self.hostname
         )
 
+        self._shutting_down = False  # flag to prevent double Telegram on shutdown
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+
     def on_open(self, ws):
         """
         Called when WebSocket connection is established.
