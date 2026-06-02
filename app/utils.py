@@ -8,7 +8,7 @@ import json                 # For encoding/decoding WebSocket messages
 import time                 # Used for retry/sleep logic in reconnect loops
 from dataclasses import dataclass  # Used to define structured Candle object
 import pandas as pd         # Used to convert stored candles into DataFrame
-from uuid import uuid7      # Generates unique IDs for transactions/feeds
+from uuid6 import uuid7      # Generates unique IDs for transactions/feeds
 import threading            # (Unused here, likely intended for db_worker threading)
 import psycopg2             # PostgreSQL driver
 from collections import deque  # Efficient FIFO queue for candle buffering
