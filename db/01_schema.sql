@@ -18,6 +18,7 @@ CREATE TABLE market_candles(
     ,start_timestamp BIGINT NOT NULL
     ,last_update_timestamp BIGINT NOT NULL
     ,insert_timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
+    ,CONSTRAINT uq_candle UNIQUE (feed_id, start_timestamp)
 );
 
 

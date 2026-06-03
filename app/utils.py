@@ -128,6 +128,7 @@ class CandleStore:
         self.history = []             # Permanently closed candles
         self.buffer = deque()         # Queue for DB worker consumption
         self.latest = None            # Currently active (in-progress) candle
+        self.seen_timestamps = set()  # track what's already been closed+buffered
 
     def update(self, msg: dict, transaction_id: str):
         """
@@ -167,11 +168,13 @@ class CandleStore:
             if c.start_timestamp > self.latest.start_timestamp:
                 closed = self.latest  # finalize previous candle
 
-                # Store closed candle in persistent history
-                self.history.append(closed)
+                if closed.start_timestamp not in self.seen_timestamps:
 
-                # Add to buffer for DB writing (async-style pipeline)
-                self.buffer.append(closed)
+                    # Store closed candle in persistent history
+                    self.history.append(closed)
+
+                    # Add to buffer for DB writing (async-style pipeline)
+                    self.buffer.append(closed)
 
                 # Replace latest with new active candle
                 self.latest = c
@@ -306,8 +309,8 @@ class CryptoSocket:
         if self.store.latest is not None:
             self.store.history.append(self.store.latest)
             self.store.buffer.append(self.store.latest)
-            self.store.latest = None
-            
+            self.store.seen_timestamps.add(self.store.latest.start_timestamp)
+
         if not self._shutting_down:
             self.telegram_notifications.send_telegram(f"✅ crypto deamon disconnected from {self.hostname}, attempting to reconnect...")
 
@@ -437,7 +440,8 @@ class DBManager:
                 volume NUMERIC(18,8) NOT NULL,
                 start_timestamp BIGINT NOT NULL,
                 last_update_timestamp BIGINT NOT NULL,
-                insert_timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
+                insert_timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+                CONSTRAINT uq_candle UNIQUE (feed_id, start_timestamp)
             );
         """)
 
@@ -546,6 +550,7 @@ def db_worker(store, db_config):
                     transaction_id, feed_id, open, high, low, close,
                     volume, start_timestamp, last_update_timestamp
                 ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (feed_id, start_timestamp) DO NOTHING
             """,
                 # Build a list of tuples — one per candle in the batch.
                 # executemany iterates over this list and substitutes %s placeholders
