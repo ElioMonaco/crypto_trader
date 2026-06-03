@@ -307,7 +307,9 @@ class CryptoSocket:
             self.store.history.append(self.store.latest)
             self.store.buffer.append(self.store.latest)
             self.store.latest = None
-        self.telegram_notifications.send_telegram(f"✅ crypto deamon disconnected from {self.hostname}, attempting to reconnect...")
+            
+        if not self._shutting_down:
+            self.telegram_notifications.send_telegram(f"✅ crypto deamon disconnected from {self.hostname}, attempting to reconnect...")
 
     def on_error(self, ws, error):
         """
@@ -343,6 +345,9 @@ class CryptoSocket:
             except Exception as e:
                 # Any unexpected failure triggers reconnect
                 logging.error("Reconnect due to: %s", e)
+            
+            if self._shutting_down:
+                break
 
             # Prevent tight reconnect loop
             time.sleep(3)
@@ -353,6 +358,10 @@ class CryptoSocket:
         Flushes the last candle, sends Telegram notification, then exits cleanly.
         """
         logging.info("Shutdown signal received, closing gracefully...")
+
+        if self._shutting_down:
+            return
+        self._shutting_down = True
 
         # Flush latest candle to buffer before closing
         if self.store.latest is not None:

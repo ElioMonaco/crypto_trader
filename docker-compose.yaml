@@ -1,5 +1,6 @@
 services:
   crypto_trader:
+    stop_grace_period: 30s
     build:
       context: ./app
       dockerfile: Dockerfile
