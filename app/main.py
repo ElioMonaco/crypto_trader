@@ -115,7 +115,7 @@ if __name__ == "__main__":
     # - writes them into PostgreSQL asynchronously
     threading.Thread(
         target=db_worker,  # function that processes candle buffer
-        args=(crypto_socket.store, db_credentials),  # shared candle store + DB connection
+        args=(crypto_socket.store, db_credentials, telegram_notifications),  # shared candle store + DB connection
         daemon=True  # would make thread exit with main program
     ).start()
 

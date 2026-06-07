@@ -16,6 +16,7 @@ import logging
 import requests
 import sys
 import signal
+from typing import Optional
 
 # ----------------------------
 # LOGGING CONFIGURATION
@@ -505,7 +506,7 @@ class DBManager:
 # BACKGROUND DB WORKER
 # ----------------------------
 
-def db_worker(store, db_config):
+def db_worker(store, db_config, telegram_notifications):
     """
     Background worker that batches and persists closed candles to PostgreSQL.
     Runs in its own thread with its own dedicated DB connection.
@@ -575,6 +576,17 @@ def db_worker(store, db_config):
             # Without this, inserts are rolled back when the connection closes.
             conn.commit()
 
+            # After persisting candles, run strategy check
+            signal = run_crt_strategy(store)
+            if signal:
+                msg = (
+                    f"📊 CRT {signal.direction} signal on {store.symbol}\n"
+                    f"Entry: {signal.entry:.2f} | SL: {signal.stop_loss:.2f} | TP: {signal.take_profit:.2f}\n"
+                    f"R:R: {signal.risk_reward} | Sweep: {signal.sweep_type}"
+                )
+                # You'll need to pass telegram_notifications into db_worker as well
+                telegram_notifications.send_telegram(msg)
+
             # Close the cursor to free server-side resources.
             # A new cursor is created each cycle rather than reusing one,
             # keeping each batch isolated in its own cursor scope.
@@ -610,3 +622,226 @@ class TelegramNotifications:
             logging.error("Telegram HTTP error: %s | response: %s", e, e.response.text)
         except Exception as e:
             logging.error("Telegram unexpected error: %s", e)
+
+# ----------------------------
+# CANDLE RANGE THEORY (CRT)
+# ----------------------------
+
+@dataclass
+class CRTSignal:
+    """
+    Represents a CRT-based trade signal.
+    """
+    direction: str            # "BUY" or "SELL"
+    entry: float              # Suggested entry price
+    stop_loss: float          # Stop loss level
+    take_profit: float        # Take profit target
+    reference_candle_ts: int  # Timestamp of the reference candle
+    trigger_candle_ts: int    # Timestamp of the sweep candle
+    sweep_type: str           # "high_sweep" or "low_sweep"
+    risk_reward: float        # R:R ratio
+
+
+def identify_reference_candle(
+    df: pd.DataFrame,
+    lookback: int = 3
+) -> Optional[pd.Series]:
+    """
+    Identifies the most recent significant reference candle to anchor CRT logic.
+
+    A valid reference candle has:
+    - A range (high - low) larger than the average of the previous N candles
+    - A clear directional body (open != close meaningfully)
+
+    Args:
+        df:       DataFrame of closed candles with columns:
+                  [start_timestamp, open, high, low, close, volume]
+        lookback: Number of prior candles used to compute the average range.
+
+    Returns:
+        The reference candle as a pd.Series, or None if not found.
+    """
+    if len(df) < lookback + 1:
+        logging.warning("Not enough candles to identify reference candle.")
+        return None
+
+    df = df.copy().reset_index(drop=True)
+    df["range"] = df["high"] - df["low"]
+    df["body"] = abs(df["close"] - df["open"])
+
+    # Use all candles except the very last (which may still be forming)
+    window = df.iloc[-(lookback + 1):-1]
+    avg_range = window["range"].mean()
+
+    # Find the candle with range meaningfully above average
+    candidates = window[window["range"] > avg_range * 1.1]
+
+    if candidates.empty:
+        logging.info("No significant reference candle found in lookback window.")
+        return None
+
+    # Pick the most recent significant candle
+    ref = candidates.iloc[-1]
+    logging.info(
+        "Reference candle identified: ts=%s | H=%.4f | L=%.4f | range=%.4f",
+        ref["start_timestamp"], ref["high"], ref["low"], ref["range"]
+    )
+    return ref
+
+
+def detect_crt_signal(
+    df: pd.DataFrame,
+    lookback: int = 3,
+    sweep_buffer: float = 0.001,
+    min_rr: float = 1.5
+) -> Optional[CRTSignal]:
+    """
+    Detects a Candle Range Theory (CRT) buy or sell signal.
+
+    CRT Logic:
+    ┌─────────────────────────────────────────────────────────┐
+    │  1. Identify a reference candle (significant range)     │
+    │  2. Next candle sweeps ABOVE its high → liquidity grab  │
+    │     → expect bearish reversal → SELL signal             │
+    │  3. Next candle sweeps BELOW its low → liquidity grab   │
+    │     → expect bullish reversal → BUY signal              │
+    │  4. Entry on close back inside the reference range      │
+    │  5. SL beyond the sweep extreme                         │
+    │  6. TP at the opposite end of the reference candle      │
+    └─────────────────────────────────────────────────────────┘
+
+    Args:
+        df:            DataFrame of closed candles (ascending order).
+        lookback:      Candles to look back for reference candle selection.
+        sweep_buffer:  Fractional buffer to confirm a sweep (e.g. 0.001 = 0.1%).
+                       Avoids false positives from wicks just touching the level.
+        min_rr:        Minimum risk/reward ratio required to emit a signal.
+
+    Returns:
+        A CRTSignal if conditions are met, otherwise None.
+    """
+    if len(df) < lookback + 2:
+        logging.warning("Not enough candles for CRT analysis.")
+        return None
+
+    df = df.copy().reset_index(drop=True)
+
+    ref = identify_reference_candle(df, lookback=lookback)
+    if ref is None:
+        return None
+
+    ref_high = ref["high"]
+    ref_low  = ref["low"]
+    ref_ts   = ref["start_timestamp"]
+
+    # The trigger candle is the one immediately after the reference
+    ref_idx = df[df["start_timestamp"] == ref_ts].index[0]
+
+    # We need at least one candle after the reference
+    if ref_idx + 1 >= len(df):
+        logging.info("No candle after reference candle yet.")
+        return None
+
+    trigger = df.iloc[ref_idx + 1]
+    trigger_ts = trigger["start_timestamp"]
+
+    # --- HIGH SWEEP → SELL signal ---
+    # Price wicks above reference high, then closes back inside the range
+    high_swept = trigger["high"] > ref_high * (1 + sweep_buffer)
+    closed_back_inside_high = trigger["close"] < ref_high
+
+    if high_swept and closed_back_inside_high:
+        entry      = trigger["close"]
+        stop_loss  = trigger["high"] * 1.001   # just above the sweep wick
+        take_profit = ref_low                   # opposite end of reference candle
+
+        risk   = stop_loss - entry
+        reward = entry - take_profit
+
+        if risk <= 0:
+            return None
+
+        rr = round(reward / risk, 2)
+        if rr < min_rr:
+            logging.info("SELL signal rejected — R:R %.2f below minimum %.2f", rr, min_rr)
+            return None
+
+        logging.info(
+            "CRT SELL signal | entry=%.4f | SL=%.4f | TP=%.4f | R:R=%.2f",
+            entry, stop_loss, take_profit, rr
+        )
+        return CRTSignal(
+            direction="SELL",
+            entry=entry,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            reference_candle_ts=int(ref_ts),
+            trigger_candle_ts=int(trigger_ts),
+            sweep_type="high_sweep",
+            risk_reward=rr
+        )
+
+    # --- LOW SWEEP → BUY signal ---
+    # Price wicks below reference low, then closes back inside the range
+    low_swept = trigger["low"] < ref_low * (1 - sweep_buffer)
+    closed_back_inside_low = trigger["close"] > ref_low
+
+    if low_swept and closed_back_inside_low:
+        entry      = trigger["close"]
+        stop_loss  = trigger["low"] * 0.999    # just below the sweep wick
+        take_profit = ref_high                  # opposite end of reference candle
+
+        risk   = entry - stop_loss
+        reward = take_profit - entry
+
+        if risk <= 0:
+            return None
+
+        rr = round(reward / risk, 2)
+        if rr < min_rr:
+            logging.info("BUY signal rejected — R:R %.2f below minimum %.2f", rr, min_rr)
+            return None
+
+        logging.info(
+            "CRT BUY signal | entry=%.4f | SL=%.4f | TP=%.4f | R:R=%.2f",
+            entry, stop_loss, take_profit, rr
+        )
+        return CRTSignal(
+            direction="BUY",
+            entry=entry,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            reference_candle_ts=int(ref_ts),
+            trigger_candle_ts=int(trigger_ts),
+            sweep_type="low_sweep",
+            risk_reward=rr
+        )
+
+    return None
+
+
+def run_crt_strategy(store) -> Optional[CRTSignal]:
+    """
+    Convenience wrapper: pulls the latest closed candles from a CandleStore
+    and runs the full CRT detection pipeline.
+
+    Call this after each candle closes (e.g. from db_worker or a scheduler).
+
+    Args:
+        store: CandleStore instance with populated history.
+
+    Returns:
+        CRTSignal if a setup is detected, otherwise None.
+    """
+    df = store.to_dataframe()
+
+    # Only use closed candles (exclude the in-progress latest candle)
+    # to_dataframe() appends self.latest at the end — drop it
+    if store.latest is not None and len(df) > 0:
+        df = df.iloc[:-1]
+
+    if df.empty:
+        return None
+
+    df = df.sort_values("start_timestamp").reset_index(drop=True)
+    return detect_crt_signal(df)
