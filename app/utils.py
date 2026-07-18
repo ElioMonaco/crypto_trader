@@ -641,16 +641,25 @@ def reconcile_open_signals(store, db_thread):
     if store.latest is not None and len(df) > 0:
         df = df.iloc[:-1]  # exclude still-forming candle
 
-    if df.empty:
-        return
+    if not df.empty:
+        df = df.sort_values("start_timestamp").reset_index(drop=True)
 
-    df = df.sort_values("start_timestamp").reset_index(drop=True)
+    # Oldest candle still held in the in-memory window (None if we have nothing yet).
+    # Any signal whose trigger candle is older than this has already had its
+    # resolving candles evicted from store.history and needs the Postgres fallback.
+    memory_floor_ts = None if df.empty else int(df["start_timestamp"].iloc[0])
 
     for row in open_signals:
         signal_id, feed_id, direction, entry, stop_loss, take_profit, trigger_ts = row
 
-        # Only look at candles that formed AFTER the trigger candle
-        future = df[df["start_timestamp"] > trigger_ts].reset_index(drop=True)
+        if memory_floor_ts is not None and trigger_ts >= memory_floor_ts:
+            # Trigger candle is still within the in-memory window — cheap path.
+            future = df[df["start_timestamp"] > trigger_ts].reset_index(drop=True)
+        else:
+            # Trigger candle has aged out of memory (or we have no in-memory
+            # candles at all yet) — go straight to Postgres, which retains
+            # every candle regardless of the in-memory history_maxlen cap.
+            future = db_thread.fetch_candles_after(feed_id, trigger_ts)
 
         if future.empty:
             continue  # no new candles since signal fired — still open
@@ -911,6 +920,36 @@ class DBManager:
         rows = cur.fetchall()
         cur.close()
         return rows
+
+    def fetch_candles_after(self, feed_id: str, after_timestamp: int):
+        """
+        Returns all closed candles for a feed with start_timestamp > after_timestamp,
+        ordered chronologically, read straight from Postgres.
+
+        This is the fallback path for reconcile_open_signals(): the in-memory
+        CandleStore.history deque only keeps a bounded recent window (history_maxlen),
+        so a signal whose trigger candle has already aged out of that window can't be
+        resolved from memory anymore. Postgres has no such limit — market_candles
+        keeps every candle db_worker has ever written — so we query it directly
+        for just those older, otherwise-unreachable signals.
+        """
+        cur = self.conn.cursor()
+
+        cur.execute("""
+            SELECT start_timestamp, open, high, low, close, volume
+            FROM market_candles
+            WHERE feed_id = %s
+              AND start_timestamp > %s
+            ORDER BY start_timestamp ASC
+        """, (feed_id, after_timestamp))
+
+        rows = cur.fetchall()
+        cur.close()
+
+        return pd.DataFrame(
+            rows,
+            columns=["start_timestamp", "open", "high", "low", "close", "volume"]
+        )
 
 
     def update_signal_outcome(self, signal_id: str, outcome: str, close_price: float, close_timestamp: int, pnl_r: float):
