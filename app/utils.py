@@ -115,7 +115,7 @@ class CandleStore:
     - Buffer closed candles for DB insertion
     """
 
-    def __init__(self, feed_id, symbol, interval, method, srv_id, db, hostname):
+    def __init__(self, feed_id, symbol, interval, method, srv_id, db, hostname, history_maxlen=1500):
         # Metadata for identifying this stream
         self.feed_id = feed_id
         self.symbol = symbol
@@ -126,7 +126,12 @@ class CandleStore:
         self.hostname = hostname
 
         # Storage structures
-        self.history = []             # Permanently closed candles
+        # Bounded deque instead of an unbounded list: on a 1m feed this keeps the
+        # in-memory window (~25h at maxlen=1500) that the CRT strategy and
+        # reconcile_open_signals() actually need, without to_dataframe() getting
+        # slower every cycle as the process stays up longer. All candles are still
+        # durably persisted to Postgres via db_worker regardless of this limit.
+        self.history = deque(maxlen=history_maxlen)  # Permanently closed candles (bounded)
         self.buffer = deque()         # Queue for DB worker consumption
         self.latest = None            # Currently active (in-progress) candle
         self.seen_timestamps = set()  # track what's already been closed+buffered
@@ -199,7 +204,7 @@ class CandleStore:
         - optionally current in-progress candle
         """
 
-        all_candles = self.history[:]  # copy history list
+        all_candles = list(self.history)  # copy history (deque doesn't support slicing)
 
         # Include latest candle if exists
         if self.latest:
@@ -340,11 +345,13 @@ class CryptoSocket:
                     on_error=self.on_error
                 )
 
-                # Run event loop with ping keepalive
-                self.ws.run_forever(
-                    ping_interval=20,
-                    ping_timeout=10
-                )
+                # Run event loop.
+                # No ping_interval/ping_timeout here: crypto.com already sends its own
+                # application-level "public/heartbeat" every 30s, which on_message()
+                # replies to directly. Layering websocket-client's own low-level
+                # ping/pong on top of that is redundant and adds a second, independent
+                # way for the connection to be torn down.
+                self.ws.run_forever()
 
             except Exception as e:
                 # Any unexpected failure triggers reconnect
