@@ -526,28 +526,29 @@ def detect_crt_signal(
         risk   = stop_loss - entry
         reward = entry - take_profit
 
-        if risk <= 0:
-            return None
-
-        rr = round(reward / risk, 2)
-        if rr < min_rr:
-            logging.info("SELL signal rejected — R:R %.2f below minimum %.2f", rr, min_rr)
-            return None
-
-        logging.info(
-            "CRT SELL signal | entry=%.4f | SL=%.4f | TP=%.4f | R:R=%.2f",
-            entry, stop_loss, take_profit, rr
-        )
-        return CRTSignal(
-            direction="SELL",
-            entry=entry,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            reference_candle_ts=int(ref_ts),
-            trigger_candle_ts=int(trigger_ts),
-            sweep_type="high_sweep",
-            risk_reward=rr
-        )
+        # A rejected SELL setup must fall through to the BUY check below rather
+        # than returning — the same trigger candle can wick above ref_high AND
+        # below ref_low while closing inside the range, so it can also be a
+        # valid low-sweep BUY setup even when the high-sweep SELL one fails.
+        if risk > 0:
+            rr = round(reward / risk, 2)
+            if rr < min_rr:
+                logging.info("SELL signal rejected — R:R %.2f below minimum %.2f", rr, min_rr)
+            else:
+                logging.info(
+                    "CRT SELL signal | entry=%.4f | SL=%.4f | TP=%.4f | R:R=%.2f",
+                    entry, stop_loss, take_profit, rr
+                )
+                return CRTSignal(
+                    direction="SELL",
+                    entry=entry,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    reference_candle_ts=int(ref_ts),
+                    trigger_candle_ts=int(trigger_ts),
+                    sweep_type="high_sweep",
+                    risk_reward=rr
+                )
 
     # --- LOW SWEEP → BUY signal ---
     # Price wicks below reference low, then closes back inside the range
@@ -793,6 +794,7 @@ class DBManager:
                 ,trigger_candle_ts          BIGINT NOT NULL
                 ,lookback                   SMALLINT NOT NULL
                 ,sweep_buffer               NUMERIC(8,5) NOT NULL
+                ,min_rr                     NUMERIC(6,2) NOT NULL
                 ,outcome                    TEXT
                 ,close_price                NUMERIC(18,8)
                 ,close_timestamp            BIGINT
@@ -809,6 +811,16 @@ class DBManager:
                     FOREIGN KEY (feed_id, trigger_candle_ts)
                     REFERENCES market_candles(feed_id, start_timestamp)
             );
+        """)
+
+        # Backfill min_rr on tables created before this column existed
+        # (CREATE TABLE IF NOT EXISTS above won't retrofit an already-existing table).
+        cur.execute("""
+            ALTER TABLE bot_signals
+            ADD COLUMN IF NOT EXISTS min_rr NUMERIC(6,2) NOT NULL DEFAULT 1.5;
+        """)
+        cur.execute("""
+            ALTER TABLE bot_signals ALTER COLUMN min_rr DROP DEFAULT;
         """)
 
         # Commit schema changes
