@@ -325,7 +325,13 @@ class CryptoSocket:
         Handles WebSocket errors.
         """
         logging.error("Error: %s", error)
-        self.telegram_notifications.send_telegram(f"❌ crypto deamon error on {self.hostname}: {error}")
+
+        # _handle_shutdown() closes this same ws from the main thread during a
+        # clean stop, which makes run_forever() detect the connection going
+        # away and fire this callback too — not a real fault, so skip the
+        # alert (mirrors the same guard already on on_close()).
+        if not self._shutting_down:
+            self.telegram_notifications.send_telegram(f"❌ crypto deamon error on {self.hostname}: {error}")
 
     def run(self):
         """
