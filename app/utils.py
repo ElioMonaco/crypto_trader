@@ -502,7 +502,6 @@ def detect_crt_signal(
     ref_low  = ref["low"]
     ref_ts   = ref["start_timestamp"]
 
-    # The trigger candle is the one immediately after the reference
     ref_idx = df[df["start_timestamp"] == ref_ts].index[0]
 
     # We need at least one candle after the reference
@@ -510,81 +509,102 @@ def detect_crt_signal(
         logging.info("No candle after reference candle yet.")
         return None
 
-    trigger = df.iloc[ref_idx + 1]
-    trigger_ts = trigger["start_timestamp"]
+    def _check_trigger(trigger) -> Optional[CRTSignal]:
+        """
+        Runs the SELL/BUY sweep checks against a single candidate trigger
+        candle. Pulled out of the loop below so every candle between the
+        reference and the latest close gets the same full evaluation —
+        not just whichever candle happens to sit immediately after ref.
+        """
+        trigger_ts = trigger["start_timestamp"]
 
-    # --- HIGH SWEEP → SELL signal ---
-    # Price wicks above reference high, then closes back inside the range
-    high_swept = trigger["high"] > ref_high * (1 + sweep_buffer)
-    closed_back_inside_high = trigger["close"] < ref_high
+        # --- HIGH SWEEP → SELL signal ---
+        # Price wicks above reference high, then closes back inside the range
+        high_swept = trigger["high"] > ref_high * (1 + sweep_buffer)
+        closed_back_inside_high = trigger["close"] < ref_high
 
-    if high_swept and closed_back_inside_high:
-        entry      = trigger["close"]
-        stop_loss  = trigger["high"] * 1.001   # just above the sweep wick
-        take_profit = ref_low                   # opposite end of reference candle
+        if high_swept and closed_back_inside_high:
+            entry      = trigger["close"]
+            stop_loss  = trigger["high"] * 1.001   # just above the sweep wick
+            take_profit = ref_low                   # opposite end of reference candle
 
-        risk   = stop_loss - entry
-        reward = entry - take_profit
+            risk   = stop_loss - entry
+            reward = entry - take_profit
 
-        # A rejected SELL setup must fall through to the BUY check below rather
-        # than returning — the same trigger candle can wick above ref_high AND
-        # below ref_low while closing inside the range, so it can also be a
-        # valid low-sweep BUY setup even when the high-sweep SELL one fails.
-        if risk > 0:
-            rr = round(reward / risk, 2)
-            if rr < min_rr:
-                logging.info("SELL signal rejected — R:R %.2f below minimum %.2f", rr, min_rr)
-            else:
-                logging.info(
-                    "CRT SELL signal | entry=%.4f | SL=%.4f | TP=%.4f | R:R=%.2f",
-                    entry, stop_loss, take_profit, rr
-                )
-                return CRTSignal(
-                    direction="SELL",
-                    entry=entry,
-                    stop_loss=stop_loss,
-                    take_profit=take_profit,
-                    reference_candle_ts=int(ref_ts),
-                    trigger_candle_ts=int(trigger_ts),
-                    sweep_type="high_sweep",
-                    risk_reward=rr
-                )
+            # A rejected SELL setup must fall through to the BUY check below
+            # rather than returning — this same candle can wick above ref_high
+            # AND below ref_low while closing inside the range, so it can also
+            # be a valid low-sweep BUY setup even when the SELL one fails.
+            if risk > 0:
+                rr = round(reward / risk, 2)
+                if rr < min_rr:
+                    logging.info(
+                        "SELL signal rejected @ ts=%s — R:R %.2f below minimum %.2f",
+                        trigger_ts, rr, min_rr
+                    )
+                else:
+                    logging.info(
+                        "CRT SELL signal | entry=%.4f | SL=%.4f | TP=%.4f | R:R=%.2f",
+                        entry, stop_loss, take_profit, rr
+                    )
+                    return CRTSignal(
+                        direction="SELL",
+                        entry=entry,
+                        stop_loss=stop_loss,
+                        take_profit=take_profit,
+                        reference_candle_ts=int(ref_ts),
+                        trigger_candle_ts=int(trigger_ts),
+                        sweep_type="high_sweep",
+                        risk_reward=rr
+                    )
 
-    # --- LOW SWEEP → BUY signal ---
-    # Price wicks below reference low, then closes back inside the range
-    low_swept = trigger["low"] < ref_low * (1 - sweep_buffer)
-    closed_back_inside_low = trigger["close"] > ref_low
+        # --- LOW SWEEP → BUY signal ---
+        # Price wicks below reference low, then closes back inside the range
+        low_swept = trigger["low"] < ref_low * (1 - sweep_buffer)
+        closed_back_inside_low = trigger["close"] > ref_low
 
-    if low_swept and closed_back_inside_low:
-        entry      = trigger["close"]
-        stop_loss  = trigger["low"] * 0.999    # just below the sweep wick
-        take_profit = ref_high                  # opposite end of reference candle
+        if low_swept and closed_back_inside_low:
+            entry      = trigger["close"]
+            stop_loss  = trigger["low"] * 0.999    # just below the sweep wick
+            take_profit = ref_high                  # opposite end of reference candle
 
-        risk   = entry - stop_loss
-        reward = take_profit - entry
+            risk   = entry - stop_loss
+            reward = take_profit - entry
 
-        if risk <= 0:
-            return None
+            if risk > 0:
+                rr = round(reward / risk, 2)
+                if rr < min_rr:
+                    logging.info(
+                        "BUY signal rejected @ ts=%s — R:R %.2f below minimum %.2f",
+                        trigger_ts, rr, min_rr
+                    )
+                else:
+                    logging.info(
+                        "CRT BUY signal | entry=%.4f | SL=%.4f | TP=%.4f | R:R=%.2f",
+                        entry, stop_loss, take_profit, rr
+                    )
+                    return CRTSignal(
+                        direction="BUY",
+                        entry=entry,
+                        stop_loss=stop_loss,
+                        take_profit=take_profit,
+                        reference_candle_ts=int(ref_ts),
+                        trigger_candle_ts=int(trigger_ts),
+                        sweep_type="low_sweep",
+                        risk_reward=rr
+                    )
 
-        rr = round(reward / risk, 2)
-        if rr < min_rr:
-            logging.info("BUY signal rejected — R:R %.2f below minimum %.2f", rr, min_rr)
-            return None
+        return None
 
-        logging.info(
-            "CRT BUY signal | entry=%.4f | SL=%.4f | TP=%.4f | R:R=%.2f",
-            entry, stop_loss, take_profit, rr
-        )
-        return CRTSignal(
-            direction="BUY",
-            entry=entry,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            reference_candle_ts=int(ref_ts),
-            trigger_candle_ts=int(trigger_ts),
-            sweep_type="low_sweep",
-            risk_reward=rr
-        )
+    # Check every candle from immediately after the reference through the
+    # latest close — not just the one right after the reference — so a sweep
+    # that plays out a few candles later (while the reference stays the same
+    # "in play" level across cycles) is never silently skipped. The earliest
+    # qualifying candle wins, since that's the closest reaction to the level.
+    for idx in range(ref_idx + 1, len(df)):
+        signal = _check_trigger(df.iloc[idx])
+        if signal is not None:
+            return signal
 
     return None
 
@@ -823,6 +843,17 @@ class DBManager:
             ALTER TABLE bot_signals ALTER COLUMN min_rr DROP DEFAULT;
         """)
 
+        # Enforce one signal per (feed, trigger candle, direction). Scanning every
+        # candle after the reference each cycle (detect_crt_signal) means the same
+        # qualifying trigger candle can be found again on a later cycle if the
+        # reference candle is still "in play" — this index, combined with the
+        # ON CONFLICT clause in insert_signal(), makes re-detecting it a no-op
+        # instead of a duplicate row + duplicate Telegram alert.
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_bot_signals_trigger
+            ON bot_signals (feed_id, trigger_candle_ts, direction);
+        """)
+
         # Commit schema changes
         self.conn.commit()
         cur.close()
@@ -878,11 +909,22 @@ class DBManager:
         self.conn.commit()
         cur.close()
 
-    def insert_signal(self, signal: CRTSignal, feed_id: str, lookback: int, sweep_buffer: float, min_rr: float):
+    def insert_signal(self, signal: CRTSignal, feed_id: str, lookback: int, sweep_buffer: float, min_rr: float) -> Optional[str]:
         """
         Inserts a detected CRT signal into bot_signals table.
         Both referenced candles must already exist in market_candles
         due to the composite foreign key constraints.
+
+        The ON CONFLICT target is the (feed_id, trigger_candle_ts, direction)
+        unique index rather than signal_id — signal_id is always a fresh UUID,
+        so conflicting on it would never actually catch anything. Re-detecting
+        a signal for a trigger candle that's already been recorded (which can
+        happen since detect_crt_signal rescans every candle after the
+        reference on each cycle) is a no-op instead of a duplicate row.
+
+        Returns the new signal_id if a row was actually inserted, or None if
+        it was skipped as a duplicate — callers use this to avoid sending a
+        duplicate Telegram alert for the same setup.
         """
         cur = self.conn.cursor()
 
@@ -894,7 +936,8 @@ class DBManager:
                 lookback, sweep_buffer, min_rr
             )
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (signal_id) DO NOTHING;
+            ON CONFLICT (feed_id, trigger_candle_ts, direction) DO NOTHING
+            RETURNING signal_id;
         """, (
             str(uuid7()),               # unique signal identifier
             feed_id,                    # links to market_feeds and market_candles
@@ -911,8 +954,12 @@ class DBManager:
             min_rr                      # strategy param — for audit/backtesting
         ))
 
+        row = cur.fetchone()
+
         self.conn.commit()
         cur.close()
+
+        return row[0] if row else None
     
     def fetch_open_signals(self):
         """
@@ -1074,8 +1121,12 @@ def db_worker(store, db_config, telegram_notifications):
             if crt_signal:
 
                 # Reuse the dedicated insert_signal method on a temporary DBManager
-                # that wraps the worker's own thread-local connection
-                db_thread.insert_signal(
+                # that wraps the worker's own thread-local connection.
+                # Returns None if this (feed, trigger candle, direction) was already
+                # recorded on an earlier cycle — detect_crt_signal rescans every
+                # candle after the reference each time, so the same qualifying
+                # candle can resurface while the reference stays "in play".
+                new_signal_id = db_thread.insert_signal(
                     signal=crt_signal,
                     feed_id=store.feed_id,
                     lookback=3,
@@ -1083,19 +1134,25 @@ def db_worker(store, db_config, telegram_notifications):
                     min_rr=1.5
                 )
 
-                logging.info(
-                    "CRT signal persisted: %s | entry=%.4f | SL=%.4f | TP=%.4f | R:R=%.2f",
-                    crt_signal.direction, crt_signal.entry,
-                    crt_signal.stop_loss, crt_signal.take_profit,
-                    crt_signal.risk_reward
-                )
+                if new_signal_id:
+                    logging.info(
+                        "CRT signal persisted: %s | entry=%.4f | SL=%.4f | TP=%.4f | R:R=%.2f",
+                        crt_signal.direction, crt_signal.entry,
+                        crt_signal.stop_loss, crt_signal.take_profit,
+                        crt_signal.risk_reward
+                    )
 
-                msg = (
-                    f"📊 CRT {crt_signal.direction} signal on {store.symbol}\n"
-                    f"Entry: {crt_signal.entry:.2f} | SL: {crt_signal.stop_loss:.2f} | TP: {crt_signal.take_profit:.2f}\n"
-                    f"R:R: {crt_signal.risk_reward} | Sweep: {crt_signal.sweep_type}"
-                )
-                telegram_notifications.send_telegram(msg)
+                    msg = (
+                        f"📊 CRT {crt_signal.direction} signal on {store.symbol}\n"
+                        f"Entry: {crt_signal.entry:.2f} | SL: {crt_signal.stop_loss:.2f} | TP: {crt_signal.take_profit:.2f}\n"
+                        f"R:R: {crt_signal.risk_reward} | Sweep: {crt_signal.sweep_type}"
+                    )
+                    telegram_notifications.send_telegram(msg)
+                else:
+                    logging.info(
+                        "CRT %s signal at trigger_ts=%s already recorded — skipping duplicate insert/alert.",
+                        crt_signal.direction, crt_signal.trigger_candle_ts
+                    )
 
             # Check all open signals against latest candles
             # Done after signal insert so a brand-new signal is never
